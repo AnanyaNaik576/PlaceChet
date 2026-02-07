@@ -54,7 +54,7 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
         });
 
         // Handle incoming signals
-        socket.on('signal', ({ signal, from }) => {
+        socket.on('signal', ({ signal, from }: { signal: SimplePeer.SignalData; from: string }) => {
             if (peerRef.current) {
                 peerRef.current.signal(signal);
             }
@@ -68,7 +68,7 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
 
         // If host, wait for receiver to join
         if (isHost) {
-            socket.on('receiver-joined', ({ receiverId }) => {
+            socket.on('receiver-joined', ({ receiverId }: { receiverId: string }) => {
                 console.log('Receiver joined, starting peer connection');
                 initializePeer(true, receiverId);
             });
@@ -93,11 +93,9 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
             // Only host captures screen
             if (isHost) {
                 stream = await navigator.mediaDevices.getDisplayMedia({
-                    video: {
-                        cursor: 'always',
-                    },
+                    video: true,
                     audio: false,
-                });
+                } as DisplayMediaStreamOptions);
                 localStreamRef.current = stream;
 
                 // Handle stream end (user stops sharing)
