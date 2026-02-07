@@ -22,6 +22,7 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
     const socketRef = useRef<Socket | null>(null);
     const peerRef = useRef<PeerInstance | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
+    const initializePeerRef = useRef<((initiator: boolean, targetId: string) => Promise<void>) | null>(null);
 
     const [isConnected, setIsConnected] = useState(false);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -29,63 +30,7 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
     const [peerConnected, setPeerConnected] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-    // Initialize socket connection
-    useEffect(() => {
-        const socket = io(SIGNALING_SERVER);
-        socketRef.current = socket;
-
-        socket.on('connect', () => {
-            console.log('Connected to signaling server');
-            setIsConnected(true);
-            socket.emit('join-room', { roomId, isHost });
-        });
-
-        socket.on('disconnect', () => {
-            setIsConnected(false);
-        });
-
-        socket.on('peer-disconnected', () => {
-            setPeerConnected(false);
-            setRemoteStream(null);
-            if (peerRef.current) {
-                peerRef.current.destroy();
-                peerRef.current = null;
-            }
-        });
-
-        // Handle incoming signals
-        socket.on('signal', ({ signal, from }: { signal: SimplePeer.SignalData; from: string }) => {
-            if (peerRef.current) {
-                peerRef.current.signal(signal);
-            }
-        });
-
-        // Handle chat messages
-        socket.on('chat-message', (msg: ChatMessage) => {
-            setMessages(prev => [...prev, msg]);
-            onChatMessage?.(msg);
-        });
-
-        // If host, wait for receiver to join
-        if (isHost) {
-            socket.on('receiver-joined', ({ receiverId }: { receiverId: string }) => {
-                console.log('Receiver joined, starting peer connection');
-                initializePeer(true, receiverId);
-            });
-        }
-
-        return () => {
-            socket.disconnect();
-            if (peerRef.current) {
-                peerRef.current.destroy();
-            }
-            if (localStreamRef.current) {
-                localStreamRef.current.getTracks().forEach(track => track.stop());
-            }
-        };
-    }, [roomId, isHost]);
-
-    // Initialize peer connection
+    // Initialize peer connection - defined first and stored in ref
     const initializePeer = useCallback(async (initiator: boolean, targetId: string) => {
         try {
             let stream: MediaStream | undefined;
@@ -148,27 +93,73 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
         }
     }, [roomId, isHost]);
 
-    // For receiver: respond to host's signal
+    // Keep ref updated with latest initializePeer
     useEffect(() => {
-        if (!isHost && socketRef.current) {
-            const socket = socketRef.current;
+        initializePeerRef.current = initializePeer;
+    }, [initializePeer]);
 
-            const handleSignal = ({ signal, from }: { signal: SimplePeer.SignalData; from: string }) => {
-                if (!peerRef.current) {
-                    // Create peer as non-initiator when receiving first signal
-                    initializePeer(false, from).then(() => {
-                        peerRef.current?.signal(signal);
-                    });
-                }
-            };
+    // Initialize socket connection
+    useEffect(() => {
+        const socket = io(SIGNALING_SERVER);
+        socketRef.current = socket;
 
-            socket.on('signal', handleSignal);
+        socket.on('connect', () => {
+            console.log('Connected to signaling server');
+            setIsConnected(true);
+            socket.emit('join-room', { roomId, isHost });
+        });
 
-            return () => {
-                socket.off('signal', handleSignal);
-            };
+        socket.on('disconnect', () => {
+            setIsConnected(false);
+        });
+
+        socket.on('peer-disconnected', () => {
+            setPeerConnected(false);
+            setRemoteStream(null);
+            if (peerRef.current) {
+                peerRef.current.destroy();
+                peerRef.current = null;
+            }
+        });
+
+        // Handle incoming signals (for both host and receiver)
+        socket.on('signal', ({ signal, from }: { signal: SimplePeer.SignalData; from: string }) => {
+            if (peerRef.current) {
+                // If peer exists, just pass the signal
+                peerRef.current.signal(signal);
+            } else if (!isHost) {
+                // Receiver: create peer when receiving first signal
+                initializePeerRef.current?.(false, from).then(() => {
+                    peerRef.current?.signal(signal);
+                });
+            }
+        });
+
+        // Handle chat messages
+        socket.on('chat-message', (msg: ChatMessage) => {
+            setMessages(prev => [...prev, msg]);
+            onChatMessage?.(msg);
+        });
+
+        // If host, wait for receiver to join, then start screen share
+        if (isHost) {
+            socket.on('receiver-joined', ({ receiverId }: { receiverId: string }) => {
+                console.log('Receiver joined, starting peer connection');
+                // Use ref to get the latest version of initializePeer
+                initializePeerRef.current?.(true, receiverId);
+            });
         }
-    }, [isHost, initializePeer]);
+
+        return () => {
+            socket.disconnect();
+            if (peerRef.current) {
+                peerRef.current.destroy();
+            }
+            if (localStreamRef.current) {
+                localStreamRef.current.getTracks().forEach(track => track.stop());
+            }
+        };
+    }, [roomId, isHost, onChatMessage]);
 
     // Send chat message
     const sendMessage = useCallback((message: string) => {
