@@ -160,8 +160,8 @@ export default function HostStage({ roomId }: HostStageProps) {
                             >
                                 <div
                                     className={`max-w-[70%] px-4 py-2 rounded-2xl ${msg.sender === 'host'
-                                            ? 'bg-indigo-500 text-white'
-                                            : 'bg-[#2a2a2a] text-white'
+                                        ? 'bg-indigo-500 text-white'
+                                        : 'bg-[#2a2a2a] text-white'
                                         }`}
                                 >
                                     <p className="break-words">{msg.message}</p>

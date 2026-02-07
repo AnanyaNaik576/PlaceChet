@@ -22,7 +22,6 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
     const socketRef = useRef<Socket | null>(null);
     const peerRef = useRef<PeerInstance | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
-    const initializePeerRef = useRef<((initiator: boolean, targetId: string) => Promise<void>) | null>(null);
 
     const [isConnected, setIsConnected] = useState(false);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -30,78 +29,75 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
     const [peerConnected, setPeerConnected] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-    // Initialize peer connection - defined first and stored in ref
-    const initializePeer = useCallback(async (initiator: boolean, targetId: string) => {
-        try {
-            let stream: MediaStream | undefined;
-
-            // Only host captures screen
-            if (isHost) {
-                stream = await navigator.mediaDevices.getDisplayMedia({
-                    video: true,
-                    audio: false,
-                } as DisplayMediaStreamOptions);
-                localStreamRef.current = stream;
-
-                // Handle stream end (user stops sharing)
-                stream.getVideoTracks()[0].onended = () => {
-                    console.log('Screen sharing ended');
-                    if (peerRef.current) {
-                        peerRef.current.destroy();
-                    }
-                };
-            }
-
-            const peer = new SimplePeer({
-                initiator,
-                trickle: false,
-                stream,
-            });
-
-            peer.on('signal', (signal) => {
-                socketRef.current?.emit('signal', {
-                    roomId,
-                    signal,
-                    to: targetId,
-                });
-            });
-
-            peer.on('connect', () => {
-                console.log('Peer connected!');
-                setPeerConnected(true);
-            });
-
-            peer.on('stream', (remoteStream) => {
-                console.log('Received remote stream');
-                setRemoteStream(remoteStream);
-            });
-
-            peer.on('error', (err) => {
-                console.error('Peer error:', err);
-                setError(err.message);
-            });
-
-            peer.on('close', () => {
-                console.log('Peer connection closed');
-                setPeerConnected(false);
-            });
-
-            peerRef.current = peer;
-        } catch (err) {
-            console.error('Failed to initialize peer:', err);
-            setError(err instanceof Error ? err.message : 'Failed to start screen sharing');
-        }
-    }, [roomId, isHost]);
-
-    // Keep ref updated with latest initializePeer
-    useEffect(() => {
-        initializePeerRef.current = initializePeer;
-    }, [initializePeer]);
-
     // Initialize socket connection
     useEffect(() => {
         const socket = io(SIGNALING_SERVER);
         socketRef.current = socket;
+
+        // Define initializePeer INSIDE useEffect to avoid stale closure
+        const initializePeer = async (initiator: boolean, targetId: string) => {
+            try {
+                let stream: MediaStream | undefined;
+
+                // Only host captures screen
+                if (isHost) {
+                    console.log('Requesting screen share...');
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: false,
+                    } as MediaStreamConstraints);
+                    localStreamRef.current = stream;
+                    console.log('Got screen stream');
+
+                    // Handle stream end (user stops sharing)
+                    stream.getVideoTracks()[0].onended = () => {
+                        console.log('Screen sharing ended');
+                        if (peerRef.current) {
+                            peerRef.current.destroy();
+                        }
+                    };
+                }
+
+                const peer = new SimplePeer({
+                    initiator,
+                    trickle: false,
+                    stream,
+                });
+
+                peer.on('signal', (signal) => {
+                    socket.emit('signal', {
+                        roomId,
+                        signal,
+                        to: targetId,
+                    });
+                });
+
+                peer.on('connect', () => {
+                    console.log('Peer connected!');
+                    setPeerConnected(true);
+                });
+
+                peer.on('stream', (incomingStream) => {
+                    console.log('Received remote stream');
+                    setRemoteStream(incomingStream);
+                });
+
+                peer.on('error', (err) => {
+                    console.error('Peer error:', err);
+                    setError(err.message);
+                });
+
+                peer.on('close', () => {
+                    console.log('Peer connection closed');
+                    setPeerConnected(false);
+                });
+
+                peerRef.current = peer;
+            } catch (err) {
+                console.error('Failed to initialize peer:', err);
+                setError(err instanceof Error ? err.message : 'Failed to start screen sharing');
+            }
+        };
 
         socket.on('connect', () => {
             console.log('Connected to signaling server');
@@ -122,15 +118,16 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
             }
         });
 
-        // Handle incoming signals (for both host and receiver)
+        // Handle incoming signals
         socket.on('signal', ({ signal, from }: { signal: SimplePeer.SignalData; from: string }) => {
             if (peerRef.current) {
-                // If peer exists, just pass the signal
                 peerRef.current.signal(signal);
             } else if (!isHost) {
                 // Receiver: create peer when receiving first signal
-                initializePeerRef.current?.(false, from).then(() => {
-                    peerRef.current?.signal(signal);
+                initializePeer(false, from).then(() => {
+                    setTimeout(() => {
+                        peerRef.current?.signal(signal);
+                    }, 100);
                 });
             }
         });
@@ -141,12 +138,11 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
             onChatMessage?.(msg);
         });
 
-        // If host, wait for receiver to join, then start screen share
+        // If host, wait for receiver to join
         if (isHost) {
             socket.on('receiver-joined', ({ receiverId }: { receiverId: string }) => {
                 console.log('Receiver joined, starting peer connection');
-                // Use ref to get the latest version of initializePeer
-                initializePeerRef.current?.(true, receiverId);
+                initializePeer(true, receiverId);
             });
         }
 
@@ -159,7 +155,8 @@ export function useWebRTC({ roomId, isHost, onChatMessage }: UseWebRTCOptions) {
                 localStreamRef.current.getTracks().forEach(track => track.stop());
             }
         };
-    }, [roomId, isHost, onChatMessage]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [roomId, isHost]);
 
     // Send chat message
     const sendMessage = useCallback((message: string) => {
