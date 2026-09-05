@@ -98,7 +98,7 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/VISHAL-Nk/placechet.git
+git clone [https://github.com/VISHAL-Nk/placechet.git](https://github.com/AnanyaNaik576/placechet.git)
 cd placechet
 
 # Install dependencies
