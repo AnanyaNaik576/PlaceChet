@@ -209,7 +209,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 <div align="center">
 
-**Made with ❤️ by [VISHAL-Nk](https://github.com/VISHAL-Nk)**
+**Made with ❤️ by [Ananya Naik](https://github.com/AnanyaNaik576)**
 
 ⭐ Star this repo if you found it useful!
 
